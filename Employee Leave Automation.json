@@ -1,0 +1,384 @@
+{
+  "name": "Employee Leave Management Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Employee Leave Request",
+        "formDescription": "Submit a request for time off. Your remaining balance will be checked automatically.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Employee Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Employee Email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Department",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "Sales" },
+                  { "option": "Engineering" },
+                  { "option": "Operations" },
+                  { "option": "HR" },
+                  { "option": "Finance" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Leave Type",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "Vacation" },
+                  { "option": "Sick" },
+                  { "option": "Personal" },
+                  { "option": "Unpaid" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Start Date",
+              "fieldType": "date",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "End Date",
+              "fieldType": "date",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reason",
+              "fieldType": "textarea",
+              "requiredField": false
+            },
+            {
+              "fieldLabel": "Manager Email",
+              "fieldType": "email",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Leave Request Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-1680, 0],
+      "webhookId": "leave-request-form"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate number of business days requested (inclusive), Mon-Fri only\nconst input = $input.first().json;\n\nconst start = new Date(input['Start Date']);\nconst end = new Date(input['End Date']);\n\nif (isNaN(start) || isNaN(end) || end < start) {\n  throw new Error('Invalid date range: End Date must be on or after Start Date.');\n}\n\nlet days = 0;\nconst cursor = new Date(start);\nwhile (cursor <= end) {\n  const day = cursor.getDay();\n  if (day !== 0 && day !== 6) days++;\n  cursor.setDate(cursor.getDate() + 1);\n}\n\nconst requestId = 'LR-' + Date.now().toString(36).toUpperCase();\n\nreturn [{\n  json: {\n    requestId,\n    employeeName: input['Employee Name'],\n    employeeEmail: input['Employee Email'],\n    department: input['Department'],\n    leaveType: input['Leave Type'],\n    startDate: input['Start Date'],\n    endDate: input['End Date'],\n    reason: input['Reason'] || '',\n    managerEmail: input['Manager Email'],\n    daysRequested: days,\n    submittedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Calculate Days Requested",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1460, 0]
+    },
+    {
+      "parameters": {
+        "operation": "lookup",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leave Balances",
+          "mode": "name"
+        },
+        "lookupColumn": "Employee Email",
+        "lookupValue": "={{ $json.employeeEmail }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Get Leave Balance",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-1240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge the balance lookup with the request data and determine remaining balance\nconst request = $('Calculate Days Requested').first().json;\nconst balanceRows = $input.all();\n\nlet currentBalance = null;\nif (balanceRows.length > 0 && balanceRows[0].json && balanceRows[0].json['Remaining Balance'] !== undefined) {\n  currentBalance = Number(balanceRows[0].json['Remaining Balance']);\n}\n\n// If no record found, treat as 0 balance so it routes to manager review\nif (currentBalance === null || isNaN(currentBalance)) {\n  currentBalance = 0;\n}\n\nconst remainingAfter = currentBalance - request.daysRequested;\nconst withinBalance = request.leaveType === 'Unpaid' ? true : remainingAfter >= 0;\n\nreturn [{\n  json: {\n    ...request,\n    currentBalance,\n    remainingAfter,\n    withinBalance,\n    status: withinBalance ? 'Approved' : 'Pending Manager Review'\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Evaluate Balance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1020, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.withinBalance }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Balance Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-800, 0]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leave Requests",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["Request ID"],
+          "value": {
+            "Request ID": "={{ $json.requestId }}",
+            "Employee Name": "={{ $json.employeeName }}",
+            "Employee Email": "={{ $json.employeeEmail }}",
+            "Department": "={{ $json.department }}",
+            "Leave Type": "={{ $json.leaveType }}",
+            "Start Date": "={{ $json.startDate }}",
+            "End Date": "={{ $json.endDate }}",
+            "Days Requested": "={{ $json.daysRequested }}",
+            "Reason": "={{ $json.reason }}",
+            "Manager Email": "={{ $json.managerEmail }}",
+            "Status": "={{ $json.status }}",
+            "Submitted At": "={{ $json.submittedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Log Request (Approved)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-580, -160]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leave Balances",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["Employee Email"],
+          "value": {
+            "Employee Email": "={{ $json.employeeEmail }}",
+            "Remaining Balance": "={{ $json.remainingAfter }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Update Remaining Balance",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-360, -160]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.employeeEmail }}",
+        "subject": "Leave Request Approved - {{ $json.requestId }}",
+        "message": "=Hi {{ $json.employeeName }},<br><br>Your leave request has been <b>automatically approved</b>.<br><br><b>Request ID:</b> {{ $json.requestId }}<br><b>Leave Type:</b> {{ $json.leaveType }}<br><b>Dates:</b> {{ $json.startDate }} to {{ $json.endDate }}<br><b>Days Used:</b> {{ $json.daysRequested }}<br><b>Remaining Balance:</b> {{ $json.remainingAfter }}<br><br>Your manager has been notified.<br><br>Thanks,<br>HR Automation",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Notify Employee (Approved)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-140, -260]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=:white_check_mark: *Leave Auto-Approved*\\n*Employee:* {{ $json.employeeName }} ({{ $json.department }})\\n*Type:* {{ $json.leaveType }}\\n*Dates:* {{ $json.startDate }} → {{ $json.endDate }} ({{ $json.daysRequested }} days)\\n*Remaining Balance:* {{ $json.remainingAfter }}\\n*Request ID:* {{ $json.requestId }}",
+        "otherOptions": {}
+      },
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Notify Slack (Approved)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [-140, -60]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leave Requests",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["Request ID"],
+          "value": {
+            "Request ID": "={{ $json.requestId }}",
+            "Employee Name": "={{ $json.employeeName }}",
+            "Employee Email": "={{ $json.employeeEmail }}",
+            "Department": "={{ $json.department }}",
+            "Leave Type": "={{ $json.leaveType }}",
+            "Start Date": "={{ $json.startDate }}",
+            "End Date": "={{ $json.endDate }}",
+            "Days Requested": "={{ $json.daysRequested }}",
+            "Reason": "={{ $json.reason }}",
+            "Manager Email": "={{ $json.managerEmail }}",
+            "Status": "={{ $json.status }}",
+            "Submitted At": "={{ $json.submittedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0010-4000-8000-000000000010",
+      "name": "Log Request (Pending)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-580, 200]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.managerEmail }}",
+        "subject": "Action Needed: Leave Request Exceeds Balance - {{ $json.requestId }}",
+        "message": "=Hi,<br><br>{{ $json.employeeName }} has submitted a leave request that exceeds their current available balance and needs your review.<br><br><b>Request ID:</b> {{ $json.requestId }}<br><b>Department:</b> {{ $json.department }}<br><b>Leave Type:</b> {{ $json.leaveType }}<br><b>Dates:</b> {{ $json.startDate }} to {{ $json.endDate }}<br><b>Days Requested:</b> {{ $json.daysRequested }}<br><b>Current Balance:</b> {{ $json.currentBalance }}<br><b>Balance After (if approved):</b> {{ $json.remainingAfter }}<br><b>Reason:</b> {{ $json.reason }}<br><br>Please review and approve/deny this request manually in the Leave Requests sheet.<br><br>Thanks,<br>HR Automation",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0011-4000-8000-000000000011",
+      "name": "Notify Manager (Review Needed)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-360, 200]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=:warning: *Leave Request Needs Manager Review*\\n*Employee:* {{ $json.employeeName }} ({{ $json.department }})\\n*Type:* {{ $json.leaveType }}\\n*Dates:* {{ $json.startDate }} → {{ $json.endDate }} ({{ $json.daysRequested }} days)\\n*Current Balance:* {{ $json.currentBalance }} | *Would go to:* {{ $json.remainingAfter }}\\n*Manager:* {{ $json.managerEmail }}\\n*Request ID:* {{ $json.requestId }}",
+        "otherOptions": {}
+      },
+      "id": "a1b2c3d4-0012-4000-8000-000000000012",
+      "name": "Notify Slack (Review Needed)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [-360, 400]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.employeeEmail }}",
+        "subject": "Leave Request Received - Pending Manager Review ({{ $json.requestId }})",
+        "message": "=Hi {{ $json.employeeName }},<br><br>Your leave request has been received. Since it exceeds your currently available balance, it has been sent to your manager for review instead of being auto-approved.<br><br><b>Request ID:</b> {{ $json.requestId }}<br><b>Leave Type:</b> {{ $json.leaveType }}<br><b>Dates:</b> {{ $json.startDate }} to {{ $json.endDate }}<br><b>Days Requested:</b> {{ $json.daysRequested }}<br><b>Current Balance:</b> {{ $json.currentBalance }}<br><br>You'll receive a follow-up once your manager responds.<br><br>Thanks,<br>HR Automation",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0013-4000-8000-000000000013",
+      "name": "Notify Employee (Pending)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-140, 200]
+    }
+  ],
+  "connections": {
+    "Leave Request Form": {
+      "main": [[{ "node": "Calculate Days Requested", "type": "main", "index": 0 }]]
+    },
+    "Calculate Days Requested": {
+      "main": [[{ "node": "Get Leave Balance", "type": "main", "index": 0 }]]
+    },
+    "Get Leave Balance": {
+      "main": [[{ "node": "Evaluate Balance", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Balance": {
+      "main": [[{ "node": "Balance Available?", "type": "main", "index": 0 }]]
+    },
+    "Balance Available?": {
+      "main": [
+        [
+          { "node": "Log Request (Approved)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Log Request (Pending)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Request (Approved)": {
+      "main": [[{ "node": "Update Remaining Balance", "type": "main", "index": 0 }]]
+    },
+    "Update Remaining Balance": {
+      "main": [
+        [
+          { "node": "Notify Employee (Approved)", "type": "main", "index": 0 },
+          { "node": "Notify Slack (Approved)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Request (Pending)": {
+      "main": [
+        [
+          { "node": "Notify Manager (Review Needed)", "type": "main", "index": 0 },
+          { "node": "Notify Employee (Pending)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Manager (Review Needed)": {
+      "main": [[{ "node": "Notify Slack (Review Needed)", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
